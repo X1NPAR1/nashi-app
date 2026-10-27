@@ -510,20 +510,25 @@ public enum ImageEngine {
         if let target { guard target>0 else { throw NashiError.invalidInput("Choose a positive target file size.") } }
         let ext=["jpg","jpeg","heic","webp","avif","png"].contains(input.pathExtension.lowercased()) ? input.pathExtension : "jpg"
         let output=OutputFiles.unique(for:input,extension:ext,suffix:" - Compressed",directory:options.outputDirectory)
-        var quality=max(0.01,min(1,options.quality))
-        for iteration in 0..<24 {
+        let quality=max(0.01,min(1,options.quality)),lossy=ext.lowercased() != "png"
+        func encode(_ percent:Int,_ scale:Double) throws->Int64 {
             try token.check();try? FileManager.default.removeItem(at:output)
-            try write(image,to:output,quality:quality)
+            let frame=scale<1 ? try resized(image,width:max(1,Int(Double(image.width)*scale)),height:max(1,Int(Double(image.height)*scale))):image
+            try write(frame,to:output,quality:Double(percent)/100)
             // The same URL is replaced on each pass; resourceValues can retain its first size.
-            let size=((try FileManager.default.attributesOfItem(atPath:output.path))[.size] as? NSNumber)?.int64Value ?? 0
-            if target == nil || size <= target! {
-                if image.width==originalWidth,image.height==originalHeight { try OutputFiles.retainSmallerOriginal(input,output:output,target:target) }
-                return [output]
-            }
-            if quality>0.15 && !["png"].contains(ext.lowercased()) { quality *= 0.72 }
-            else { image=try resized(image,width:max(1,Int(Double(image.width)*0.8)),height:max(1,Int(Double(image.height)*0.8))) }
-            if iteration == 23 { try? FileManager.default.removeItem(at:output);throw NashiError.failed("The requested file size could not be reached. Choose a larger target.") }
+            return ((try FileManager.default.attributesOfItem(atPath:output.path))[.size] as? NSNumber)?.int64Value ?? 0
         }
+        let start=Int((quality*100).rounded())
+        let outcome=try target.map { try TargetSizeSearch.run(originalBytes:inputSize,targetBytes:$0,startQuality:start,lossy:lossy,allowResize:true,token:token,encode:encode) }
+        if let outcome,outcome.status == .bestEffortAboveTarget {
+            try? FileManager.default.removeItem(at:output)
+            let detail=outcome.smallest.map{"\(ByteCountFormatter.string(fromByteCount:$0.bytes,countStyle:.binary)) (\(TargetSizeSearch.describe($0,lossy:lossy)))"} ?? "unavailable"
+            throw NashiError.failed("The requested file size could not be reached. The smallest result was \(detail). Choose a larger target.")
+        }
+        let best=outcome?.best
+        if let best { if try encode(best.quality,best.scale) != best.bytes { try? FileManager.default.removeItem(at:output);throw NashiError.failed("The compressed size changed between attempts.") } }
+        else { _=try encode(start,1) }
+        if (best?.scale ?? 1)==1,image.width==originalWidth,image.height==originalHeight { try OutputFiles.retainSmallerOriginal(input,output:output,target:target) }
         return [output]
     }
 
