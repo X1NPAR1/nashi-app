@@ -161,6 +161,19 @@ final class DocumentEngineTests: XCTestCase {
         }
     }
 
+    func testDanglingLinkNamedLikeTheExtractedFolderDoesNotBlockExtraction() throws {
+        let fm = FileManager.default
+        let link = root.appendingPathComponent("Bundle Extracted")
+        try fm.createSymbolicLink(atPath: link.path, withDestinationPath: root.appendingPathComponent("Missing folder").path)
+        let payload = root.appendingPathComponent("Payload", isDirectory: true)
+        try fm.createDirectory(at: payload, withIntermediateDirectories: true)
+        try Data("data\n".utf8).write(to: payload.appendingPathComponent("a.txt"))
+        let archive = root.appendingPathComponent("Bundle.zip")
+        try ArchiveCodec.create(from: payload, at: archive, format: "zip", token: .init())
+        XCTAssertEqual(try DocumentEngine.extractArchive(archive, options: .init(), token: .init()).first?.lastPathComponent, "Bundle Extracted 2")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: link.path), root.appendingPathComponent("Missing folder").path)
+    }
+
     func testCancellationProducesNoPublishedDocumentOrExtractedFolder() throws {
         let input = try file("Cancelled.txt", "content")
         let token = CancellationToken(); token.cancel()

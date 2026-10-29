@@ -101,8 +101,15 @@ public enum MediaEngine {
         }
         for key in metadata.keys.sorted() {
             guard let value = metadata[key], !key.isEmpty, !key.contains("\0"), !value.contains("\0") else { throw NashiError.invalidInput("Metadata fields cannot be empty or contain null characters.") }
-            let (specifier, field) = try metadataSpecifier(key)
+            let (requested, field) = try metadataSpecifier(key)
+            var specifier = requested
             guard !field.isEmpty, !field.contains("=") else { throw NashiError.invalidInput("Invalid metadata field: \(key)") }
+            if removeAll, specifier.hasPrefix("-metadata:s:"), let index = Int(specifier.dropFirst("-metadata:s:".count)) {
+                // Stream specifiers address output streams; unmapped tracks shift later ones down.
+                let removed = Set(info.streams.filter { $0.kind == "data" || $0.isAttachedPicture }.map(\.index))
+                guard !removed.contains(index) else { throw NashiError.invalidInput("Track \(index) is removed with all metadata: \(key)") }
+                specifier = "-metadata:s:\(index - removed.filter { $0 < index }.count)"
+            }
             arguments += [specifier, "\(field)=\(value)"]
         }
         if ["mp4", "mov", "m4a", "m4v"].contains(ext) { arguments += ["-movflags", "+use_metadata_tags"] }
@@ -382,7 +389,9 @@ public enum MediaEngine {
             let color = try ffmpegColor(options.backgroundColor)
             let out = try outputURL(input, ext: "mp4", suffix: " Visualization", options: options)
             let filter = "scale=\(w):\(h):force_original_aspect_ratio=decrease,pad=\(w):\(h):(ow-iw)/2:(oh-ih)/2:color=\(color),setsar=1"
-            try render(["-loop", "1", "-framerate", "30", "-i", image.path, "-i", input.path, "-map", "0:v:0", "-map", "1:a:0", "-vf", filter, "-t", decimal(info.duration), "-shortest"] + videoEncoding("mp4", quality: options.quality, sourceAudio: info.audio), to: out, token: token, duration: info.duration, progress: progress)
+            // Input options apply only to the next -i, so each input needs its own whitelist.
+            let localOnly = ["-protocol_whitelist", "file,pipe,crypto,data"]
+            try render(localOnly + ["-loop", "1", "-framerate", "30", "-i", image.path] + localOnly + ["-i", input.path, "-map", "0:v:0", "-map", "1:a:0", "-vf", filter, "-t", decimal(info.duration), "-shortest"] + videoEncoding("mp4", quality: options.quality, sourceAudio: info.audio), to: out, token: token, duration: info.duration, progress: progress)
             return [out]
         }
         let visual: String
@@ -500,7 +509,8 @@ public enum MediaEngine {
                     if ["mp4", "mov", "m4v"].contains(ext) { arguments += ["-movflags", "+faststart"] }
                 } else {
                     arguments += ["-map", "0:a:0", "-vn"] + audioEncoding(ext, quality: options.quality, bitrate: Int(audioRate), source: info.audio)
-                    if audioRate < 24000 { arguments += ["-ac", "1", "-ar", "22050"] }
+                    // libopus cannot encode at 22.05 kHz; 24 kHz is its nearest supported rate.
+                    if audioRate < 24000 { arguments += ["-ac", "1", "-ar", ext == "opus" ? "24000" : "22050"] }
                 }
                 try render(arguments, to: out, token: token, duration: info.duration, progress: { value,_ in attemptProgress(OperationProgress.map(value, from: video ? 0.5 : 0, to: 1),"Encoding…") })
                 ownsOutput = true

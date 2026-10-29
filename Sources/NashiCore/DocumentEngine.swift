@@ -49,6 +49,12 @@ public enum DocumentEngine {
 
         var source = input
         let ext = normalized(input.pathExtension)
+        if ext == "html" && format == "pdf" {
+            // The office importer drops most CSS layout; WebKit prints the page as a browser does.
+            let pdf = work.appendingPathComponent(input.deletingPathExtension().lastPathComponent).appendingPathExtension("pdf")
+            try HTMLPDFRenderer.render(input, to: pdf, token: token)
+            return try publish(pdf, to: output, token: token)
+        }
         if ext == "pages" {
             // Modern IWA Pages files are parsed locally; the original is
             // never opened by or handed to an installed Apple office app.
@@ -266,7 +272,8 @@ public enum DocumentEngine {
     }
     private static func uniqueFolder(_ name: String, in parent: URL) -> URL {
         var candidate = parent.appendingPathComponent(name, isDirectory: true), index = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
+        // lstat-based, so a dangling link with this name is not chosen for moveItem.
+        while (try? FileManager.default.attributesOfItem(atPath: candidate.path)) != nil {
             candidate = parent.appendingPathComponent("\(name) \(index)", isDirectory: true); index += 1
         }
         return candidate

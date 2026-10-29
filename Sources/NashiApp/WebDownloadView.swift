@@ -31,12 +31,12 @@ import NashiCore
     }
     func editedLink() {
         guard !downloading else { return }
-        inspection?.cancel();inspectionToken.cancel();revision=UUID();inspecting=false;info=nil;error=nil;completed=[]
+        inspection?.cancel();inspectionToken.cancel();revision=UUID();inspecting=false;info=nil;error=nil;completed=[];pendingMode=nil
     }
     func pasteLink() {
         guard !downloading else { return }
         guard let url=WebLinkPayload.clipboardLink() else { error="Copy a video share link or an image address first.";return }
-        linkText=url.absoluteString;inspect()
+        pendingMode=nil;linkText=url.absoluteString;inspect()
     }
     func inspect() {
         guard !downloading else { return }

@@ -392,7 +392,7 @@ struct ToolEditor:View {
             Picker("Canvas",selection:collage(\.aspectRatio)) { Text("Square · 1:1").tag(1.0);Text("Landscape · 16:9").tag(16.0/9);Text("Portrait · 9:16").tag(9.0/16);Text("Portrait · 4:5").tag(4.0/5) }
             number("Canvas width",value:collage(\.width))
             Picker("Image fit",selection:collage(\.imageFit)) { Text("Fill cells (crop edges)").tag(ImageFit.fill);Text("Fit whole image").tag(ImageFit.fit) }
-            number("Spacing",value:collage(\.spacing));number("Outer padding",value:collage(\.outerPadding));slider("Corners",value:collage(\.cornerRadius),range:0...100)
+            number("Spacing",value:collage(\.spacing));number("Outer padding",value:collage(\.outerPadding));slider("Corners",value:collage(\.cornerRadius),range:0...100,reset:CollageOptions().cornerRadius)
             ColorPicker("Background",selection:colorBinding(collage(\.backgroundColor),preservingOpacity:true))
             HStack { Button("Background Image…") { let panel=NSOpenPanel();if panel.runModal() == .OK { var c=options.collage ?? .init();c.backgroundImage=panel.url;options.collage=c } };if options.collage?.backgroundImage != nil { Button("Remove Image") { var c=options.collage ?? .init();c.backgroundImage=nil;options.collage=c } } }
             orderControls
@@ -830,7 +830,7 @@ struct ToolEditor:View {
     func collage<T>(_ key:WritableKeyPath<CollageOptions,T>)->Binding<T> { Binding(get:{(options.collage ?? .init())[keyPath:key]},set:{var value=options.collage ?? .init();value[keyPath:key]=$0;options.collage=value}) }
     func relative(_ value:Binding<Double>)->Binding<Double> { Binding(get:{value.wrappedValue-1},set:{value.wrappedValue=$0+1}) }
     func number(_ label:String,value:Binding<Int>)->some View { HStack { Text(label);TextField("",value:value,format:.number).textFieldStyle(.roundedBorder).frame(minWidth:60) } }
-    func slider(_ title:String,value:Binding<Double>,range:ClosedRange<Double>,unit:String="")->some View { HStack { LText(title).font(.callout).frame(width:105,alignment:.leading);Slider(value:value,in:range).tint(.nashi);Text("\(value.wrappedValue,specifier:"%.2f") \(unit)").font(.caption.monospacedDigit()).frame(width:70,alignment:.trailing);Button { value.wrappedValue=["Playback speed":1,"Target loudness":-16,"Loudness range":11,"True peak limit":-1.5,"Left volume":1,"Right volume":1,"Padding":160,"Corners":24,"Shadow":24,"Stroke width":3,"Text size":24][title] ?? 0 } label:{Image(systemName:"arrow.counterclockwise").font(.caption)}.buttonStyle(.plain) } }
+    func slider(_ title:String,value:Binding<Double>,range:ClosedRange<Double>,unit:String="",reset:Double?=nil)->some View { HStack { LText(title).font(.callout).frame(width:105,alignment:.leading);Slider(value:value,in:range).tint(.nashi);Text("\(value.wrappedValue,specifier:"%.2f") \(unit)").font(.caption.monospacedDigit()).frame(width:70,alignment:.trailing);Button { value.wrappedValue=reset ?? ["Playback speed":1,"Target loudness":-16,"Loudness range":11,"True peak limit":-1.5,"Left volume":1,"Right volume":1,"Padding":160,"Corners":24,"Shadow":24,"Stroke width":3,"Text size":24,"Silence threshold":-50][title] ?? 0 } label:{Image(systemName:"arrow.counterclockwise").font(.caption)}.buttonStyle(.plain) } }
     func colorBinding(_ string:Binding<String>,preservingOpacity:Bool=false)->Binding<Color> {
         Binding(get:{Color(cgColor:ImageEngine.color(string.wrappedValue))},set:{
             string.wrappedValue=preservingOpacity ? ImageColorCodec.backgroundHex(NSColor($0)):hex($0)
@@ -839,7 +839,10 @@ struct ToolEditor:View {
     func hex(_ color:Color)->String { guard let rgb=NSColor(color).usingColorSpace(.sRGB) else{return "#FFFFFF"};return String(format:"#%02X%02X%02X",Int(rgb.redComponent*255),Int(rgb.greenComponent*255),Int(rgb.blueComponent*255)) }
     func timeLabel(_ time:Double)->String {
         guard time.isFinite,time>=0,time<Double(Int.max) else { return "—" }
-        return String(format:"%02ld:%06.3f",Int(time)/60,time.truncatingRemainder(dividingBy:60))
+        // Round to the displayed millisecond first so 59.9996 carries into the minute.
+        let rounded=(time*1000).rounded()/1000
+        guard rounded<Double(Int.max) else { return "—" }
+        return String(format:"%02ld:%06.3f",Int(rounded)/60,rounded.truncatingRemainder(dividingBy:60))
     }
 }
 

@@ -94,6 +94,8 @@ struct WheelItem {
             case .open:NSWorkspace.shared.open(media.primaryURL)
             };return
         }
+        // A job may have started while the wheel was open; keep its selection.
+        guard !state.working else { return }
         state.inputs=inputs;if let action=item.action { state.perform(action) };if let op=item.operation { state.select(op) }
     }
     func hide() { keyboardMode=false;panel?.orderOut(nil);if let monitor=keyMonitor { NSEvent.removeMonitor(monitor);keyMonitor=nil } }

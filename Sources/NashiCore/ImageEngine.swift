@@ -152,8 +152,9 @@ public enum ImageEngine {
         guard options.width != nil || options.height != nil else { return image }
         for value in [options.width,options.height].compactMap({$0}) { guard value>0,value<=32000 else { throw NashiError.invalidInput("Image dimensions must be between 1 and 32,000 pixels.") } }
         let ratio = Double(image.height) / Double(image.width)
-        let width = options.width ?? Int(Double(options.height!) / ratio)
-        let height = options.height ?? Int(Double(width) * ratio)
+        // Round the derived side and keep at least one pixel for very thin images.
+        let width = options.width ?? max(1, Int((Double(options.height!) / ratio).rounded()))
+        let height = options.height ?? max(1, Int((Double(width) * ratio).rounded()))
         return try resized(image, width: width, height: height)
     }
 
@@ -510,15 +511,16 @@ public enum ImageEngine {
         if let target { guard target>0 else { throw NashiError.invalidInput("Choose a positive target file size.") } }
         let ext=["jpg","jpeg","heic","webp","avif","png"].contains(input.pathExtension.lowercased()) ? input.pathExtension : "jpg"
         let output=OutputFiles.unique(for:input,extension:ext,suffix:" - Compressed",directory:options.outputDirectory)
-        // Each attempt overwrites the output; a cancelled or failed search must not leave one behind.
-        var complete=false;defer { if !complete { try? FileManager.default.removeItem(at:output) } }
+        // Attempts are encoded privately; a failed or cancelled pass leaves no partial output.
+        let temporary=output.deletingLastPathComponent().appendingPathComponent(".nashi-\(UUID().uuidString)").appendingPathExtension(output.pathExtension)
+        defer { try? FileManager.default.removeItem(at:temporary) }
         let quality=max(0.01,min(1,options.quality)),lossy=ext.lowercased() != "png"
         func encode(_ percent:Int,_ scale:Double) throws->Int64 {
-            try token.check();try? FileManager.default.removeItem(at:output)
+            try token.check();try? FileManager.default.removeItem(at:temporary)
             let frame=scale<1 ? try resized(image,width:max(1,Int(Double(image.width)*scale)),height:max(1,Int(Double(image.height)*scale))):image
-            try write(frame,to:output,quality:Double(percent)/100)
+            try write(frame,to:temporary,quality:Double(percent)/100)
             // The same URL is replaced on each pass; resourceValues can retain its first size.
-            return ((try FileManager.default.attributesOfItem(atPath:output.path))[.size] as? NSNumber)?.int64Value ?? 0
+            return ((try FileManager.default.attributesOfItem(atPath:temporary.path))[.size] as? NSNumber)?.int64Value ?? 0
         }
         let start=Int((quality*100).rounded())
         // Skipping the search is safe only when retainSmallerOriginal can fall back to the
@@ -526,14 +528,13 @@ public enum ImageEngine {
         let keepsOriginal=image.width==originalWidth && image.height==originalHeight && input.pathExtension.lowercased()==ext.lowercased()
         let outcome=try target.map { try TargetSizeSearch.run(originalBytes:keepsOriginal ? inputSize:.max,targetBytes:$0,startQuality:start,lossy:lossy,allowResize:true,token:token,encode:encode) }
         if let outcome,outcome.status == .bestEffortAboveTarget {
-            try? FileManager.default.removeItem(at:output)
             throw NashiError.failed("The requested file size could not be reached. Choose a larger target.")
         }
         let best=outcome?.best
-        if let best { if try encode(best.quality,best.scale) != best.bytes { try? FileManager.default.removeItem(at:output);throw NashiError.failed("The compressed size changed between attempts.") } }
+        if let best { if try encode(best.quality,best.scale) != best.bytes { throw NashiError.failed("The compressed size changed between attempts.") } }
         else { _=try encode(start,1) }
-        if (best?.scale ?? 1)==1,image.width==originalWidth,image.height==originalHeight { try OutputFiles.retainSmallerOriginal(input,output:output,target:target) }
-        complete=true
+        if (best?.scale ?? 1)==1,image.width==originalWidth,image.height==originalHeight { try OutputFiles.retainSmallerOriginal(input,output:temporary,target:target) }
+        try FileManager.default.moveItem(at:temporary,to:output)
         return [output]
     }
 

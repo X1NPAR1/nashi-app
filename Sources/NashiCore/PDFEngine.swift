@@ -30,7 +30,7 @@ public enum PDFEngine {
                 let w=max(1,Int(scaledWidth.rounded())),h=max(1,Int(scaledHeight.rounded()))
                 guard w<=32000,h<=32000,let ctx=CGContext(data:nil,width:w,height:h,bitsPerComponent:8,bytesPerRow:0,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else { throw NashiError.failed("PDF page is too large to render at this DPI.") }
                 ctx.setFillColor(CGColor(gray:1,alpha:1));ctx.fill(CGRect(x:0,y:0,width:w,height:h));ctx.scaleBy(x:scale,y:scale)
-                ctx.concatenate(ref.getDrawingTransform(.mediaBox,rect:bounds,rotate:Int32(page.rotation)-ref.rotationAngle,preserveAspectRatio:true))
+                ctx.concatenate(ref.getDrawingTransform(.cropBox,rect:bounds,rotate:Int32(page.rotation)-ref.rotationAngle,preserveAspectRatio:true))
                 ctx.drawPDFPage(ref)
                 for annotation in page.annotations { annotation.draw(with:.mediaBox,in:ctx) }
                 try token.check()
@@ -69,6 +69,7 @@ public enum PDFEngine {
                 let order=try pageOrder(options.pageRanges,count:pdf.pageCount),chunk=max(1,options.pagesPerFile)
                 let folder=OutputFiles.unique(for:input,extension:"",suffix:" - Pages",directory:options.outputDirectory)
                 try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+                var saved=false;defer { if !saved { try? FileManager.default.removeItem(at:folder) } }
                 for start in stride(from:0,to:order.count,by:chunk) {
                     try token.check()
                     let selection=Array(order[start..<min(start+chunk,order.count)])
@@ -77,6 +78,7 @@ public enum PDFEngine {
                     try bytes.write(to:output,options:.atomic);outputs.append(output)
                     progress(Double(min(start+chunk,order.count))/Double(order.count),"Saved \(min(start+chunk,order.count)) of \(order.count) pages")
                 }
+                saved=true
             case .organizePDF:
                 let order=options.pdfPageOrder.isEmpty ? try pageOrder(options.pageRanges,count:pdf.pageCount):options.pdfPageOrder
                 var rotations:[Int:Int]=[:]
@@ -116,7 +118,8 @@ public enum PDFEngine {
                     outputs.append(output);continue
                 }
                 var dpi=144.0,quality=options.quality
-                var complete=false
+                var complete=false,wrote=false
+                defer { if wrote && !complete { try? FileManager.default.removeItem(at:output) } }
                 for attempt in 0..<14 {
                     try token.check();let compressed=PDFDocument()
                     for n in 0..<pdf.pageCount {
@@ -128,7 +131,7 @@ public enum PDFEngine {
                         guard let data=bitmap.representation(using:.jpeg,properties:[.compressionFactor:quality]),let img=NSImage(data:data),let result=PDFPage(image:img) else { continue }
                         result.setBounds(bounds,for:.mediaBox);compressed.insert(result,at:compressed.pageCount)
                     }
-                    guard compressed.write(to:output) else { throw NashiError.failed("Could not compress PDF.") }
+                    wrote=true;guard compressed.write(to:output) else { throw NashiError.failed("Could not compress PDF.") }
                     let bytes=(try FileManager.default.attributesOfItem(atPath:output.path)[.size] as? NSNumber)?.int64Value ?? 0
                     if target == nil || bytes<=target! { complete=true;break };dpi=max(36,dpi*0.8);quality=max(0.05,quality*0.75)
                 }
@@ -243,7 +246,7 @@ public enum PDFEngine {
     }
     public static func uniformWidth(_ document:PDFDocument,token:CancellationToken = .init()) throws -> PDFDocument {
         let pages=(0..<document.pageCount).compactMap{document.page(at:$0)}
-        func displayedSize(_ page:PDFPage)->CGSize { let b=page.bounds(for:.mediaBox);return abs(page.rotation)%180==90 ? CGSize(width:b.height,height:b.width):b.size }
+        func displayedSize(_ page:PDFPage)->CGSize { let b=page.bounds(for:.cropBox);return abs(page.rotation)%180==90 ? CGSize(width:b.height,height:b.width):b.size }
         guard let narrowest=pages.map({displayedSize($0).width}).min(),narrowest>0 else { throw NashiError.invalidInput("The PDF has no valid page sizes.") }
         let data=NSMutableData();guard let consumer=CGDataConsumer(data:data),let context=CGContext(consumer:consumer,mediaBox:nil,nil) else { throw NashiError.failed("Could not scale PDF pages.") }
         for page in pages {
@@ -252,7 +255,7 @@ public enum PDFEngine {
             let boxData=Data(bytes:&box,count:MemoryLayout<CGRect>.size)
             context.beginPDFPage([kCGPDFContextMediaBox:boxData] as CFDictionary)
             let rotation=Int32(page.rotation)-Int32(ref.rotationAngle)
-            let transform=ref.getDrawingTransform(.mediaBox,rect:box,rotate:rotation,preserveAspectRatio:true)
+            let transform=ref.getDrawingTransform(.cropBox,rect:box,rotate:rotation,preserveAspectRatio:true)
             context.concatenate(transform);context.drawPDFPage(ref)
             for annotation in page.annotations { annotation.draw(with:.mediaBox,in:context) }
             context.endPDFPage()
